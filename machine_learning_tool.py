@@ -1,6 +1,7 @@
 import cupy as np
 from math import e
 from cupyx.scipy.signal import correlate, convolve
+from os import listdir
 
 def ReLU_deriv(X):
     return X>0
@@ -210,3 +211,68 @@ class model:
 
         cost = self.cost_function(As[-1], y)
         return cost
+
+    def save(self, save_dir):
+        shapes = open(save_dir+'\\shapes.txt', 'wb')
+        shapes_txt = ''
+        for count, layer in enumerate(self.layers):
+            if layer.type == 'dense':
+                file1 = open(save_dir + '\\{}w'.format(count), 'wb')
+                file1.write(layer.weight.tobytes())
+                file1.close()
+
+                file2 = open(save_dir + '\\{}b'.format(count), 'wb')
+                file2.write(layer.bias.tobytes())
+                file2.close()
+
+                shapes_txt += '{}\n'.format(layer.weight.shape)
+                shapes_txt += '{}\n'.format(layer.bias.shape)
+            elif layer.type == 'conv2D':
+                file1 = open(save_dir + '\\{}k'.format(count), 'wb')
+                file1.write(layer.kernel.tobytes())
+                file1.close()
+
+                file2 = open(save_dir + '\\{}b'.format(count), 'wb')
+                file2.write(layer.bias.tobytes())
+                file2.close()
+
+                shapes_txt += '{}\n'.format(layer.kernel.shape)
+                shapes_txt += '{}\n'.format(layer.bias.shape)
+            else:
+                file1 = open(save_dir+'\\{}a'.format(count), 'wb')
+                file1.close()
+                file2 = open(save_dir+'\\{}b'.format(count), 'wb')
+                file2.close()
+                shapes_txt += 'a\n'
+                shapes_txt += 'b\n'
+        shapes.write(shapes_txt.encode())
+        shapes.close()
+
+    def load(self, save_dir):
+        shapes = open(save_dir+'\\shapes.txt', 'rb').readlines()
+        files = listdir(save_dir)
+        files.remove('shapes.txt')
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        for count, layer in enumerate(self.layers):
+            if layer.type == 'conv2D':
+                file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
+                kernel = np.frombuffer(file1)
+                kernel = np.reshape(kernel, eval(shapes[int(2*count)]))
+
+                file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
+                bias = np.frombuffer(file2)
+                bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
+
+                layer.kernel = kernel
+                layer.bias = bias
+            elif layer.type == 'dense':
+                file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
+                weight = np.frombuffer(file1)
+                weight = np.reshape(weight, eval(shapes[int(2*count)]))
+
+                file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
+                bias = np.frombuffer(file2)
+                bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
+
+                layer.weight = weight
+                layer.bias = bias
