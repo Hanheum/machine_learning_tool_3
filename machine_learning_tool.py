@@ -2,6 +2,7 @@ import cupy as np
 from math import e
 from cupyx.scipy.signal import correlate, convolve
 from os import listdir
+from random import choice
 
 def ReLU_deriv(X):
     return X>0
@@ -31,14 +32,52 @@ def MSE(X, Y):
     cost = np.sum((Y-X)**2)/(np.prod(np.array(Y.shape)))
     return cost
 
+def categorical_crossentropy(Y, Y_pred):
+    logged = np.log10(Y_pred)
+    print(Y_pred)
+    sumed = Y.dot(logged.T)
+    CE = -np.sum(sumed)
+    print(CE)
+    return CE
+
 def no_effect(x):
     return x
 
+def random_seed_generator(min2max, size):
+    seed = []
+    size_nums = []
+    for i in range(*min2max):
+        size_nums.append(i)
+    for i in range(size):
+        seed_choice = choice(size_nums)
+        size_nums.remove(seed_choice)
+        seed.append(seed_choice)
+    return seed
+
+def cost_deriv(A, Y, function, A_deriv=True):
+    very_small_unit = 0.00000001
+    first_cost = function(A, Y)
+    deriv = np.zeros_like(A)
+    factor_size = len(deriv[0])
+    for a in range(len(A)):
+        for b in range(factor_size):
+            A[a][b] += very_small_unit
+            if A_deriv:
+                deriv[a][b] = ((MSE(A, Y)-first_cost)/very_small_unit)*sigmoid_deriv(A[a][b])
+            else:
+                deriv[a][b] = ((MSE(A, Y) - first_cost) / very_small_unit)
+            A[a][b] -= very_small_unit
+    return deriv
+
 class dense:
-    def __init__(self, nods, activation, input_shape, learning_rate=0.001, no_activation_derivative=False):
+    def __init__(self, nods, activation, input_shape=None, learning_rate=0.001, no_activation_derivative=False):
         self.nods = nods
         self.input_shape = input_shape
-        self.weight = np.random.randn(input_shape[0], nods)
+        self.weight = 0
+        try:
+            self.weight = np.random.randn(input_shape[0], nods)
+        except:
+            pass
         self.bias = np.zeros((nods))
         self.learning_rate = learning_rate
         self.Z = 0
@@ -47,6 +86,7 @@ class dense:
         self.activation_derivative = 1
         self.activation = ReLU
         self.no_activation_derivative = no_activation_derivative
+        self.output_shape = (nods, )
         if activation == 'relu':
             self.activation_derivative = ReLU_deriv
             pass
@@ -55,6 +95,11 @@ class dense:
             self.activation_derivative = sigmoid_deriv
         elif activation == 'softmax':
             self.activation = softmax
+
+    def init2(self, input_shape):
+        self.input_shape = input_shape
+        self.weight = np.random.randn(input_shape[0], self.nods)
+        self.bias = np.zeros((self.nods))
 
     def forward(self, x):
         self.Z = x.dot(self.weight)+self.bias
@@ -168,7 +213,18 @@ class model:
             self.types.append(i.type)
         self.Zs = []
         self.As = []
-        self.cost_function = MSE
+        if cost == 'mse':
+            self.cost_function = MSE
+        elif cost == 'categorical_crossentropy':
+            self.cost_function = categorical_crossentropy
+
+        shapes = []
+        for layer in layers:
+            if layer.input_shape == None:
+                layer.init2(shapes[-1])
+                shapes.append(layer.output_shape)
+            else:
+                shapes.append(layer.output_shape)
 
     def forward_propagation(self, x):
         target = x
@@ -188,7 +244,7 @@ class model:
 
     def backward_propagation(self, x, y):
         Zs, As = self.forward_propagation(x)
-        target_dZ = As[-1]-y
+        target_dZ = cost_deriv(As[-1], y, self.cost_function)
         for count in range(len(self.layers)):
             layer_index = int(len(self.layers)-count-1)
             if self.types[layer_index] == 'dense':
@@ -210,6 +266,18 @@ class model:
                 target_dZ = self.layers[layer_index].backward(target_dZ)
 
         cost = self.cost_function(As[-1], y)
+        return cost
+
+    def sgd(self, x, y, batch_size=32):
+        random_seed = random_seed_generator((0, len(y)), batch_size)
+        x_shape = x[0].shape
+        y_shape = y[0].shape
+        batch_x = np.zeros((batch_size, *x_shape))
+        batch_y = np.zeros((batch_size, *y_shape))
+        for a, i in enumerate(random_seed):
+            batch_x[a] = x[i]
+            batch_y[a] = y[i]
+        cost = self.backward_propagation(x=batch_x, y=batch_y)
         return cost
 
     def save(self, save_dir):
@@ -249,30 +317,33 @@ class model:
         shapes.close()
 
     def load(self, save_dir):
-        shapes = open(save_dir+'\\shapes.txt', 'rb').readlines()
-        files = listdir(save_dir)
-        files.remove('shapes.txt')
-        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
-        for count, layer in enumerate(self.layers):
-            if layer.type == 'conv2D':
-                file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
-                kernel = np.frombuffer(file1)
-                kernel = np.reshape(kernel, eval(shapes[int(2*count)]))
+        try:
+            shapes = open(save_dir+'\\shapes.txt', 'rb').readlines()
+            files = listdir(save_dir)
+            files.remove('shapes.txt')
+            files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+            for count, layer in enumerate(self.layers):
+                if layer.type == 'conv2D':
+                    file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
+                    kernel = np.frombuffer(file1)
+                    kernel = np.reshape(kernel, eval(shapes[int(2*count)]))
 
-                file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
-                bias = np.frombuffer(file2)
-                bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
+                    file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
+                    bias = np.frombuffer(file2)
+                    bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
 
-                layer.kernel = kernel
-                layer.bias = bias
-            elif layer.type == 'dense':
-                file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
-                weight = np.frombuffer(file1)
-                weight = np.reshape(weight, eval(shapes[int(2*count)]))
+                    layer.kernel = kernel
+                    layer.bias = bias
+                elif layer.type == 'dense':
+                    file1 = open(save_dir+'\\{}'.format(files[int(2*count+1)]), 'rb').read()
+                    weight = np.frombuffer(file1)
+                    weight = np.reshape(weight, eval(shapes[int(2*count)]))
 
-                file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
-                bias = np.frombuffer(file2)
-                bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
+                    file2 = open(save_dir+'\\{}'.format(files[int(2*count)]), 'rb').read()
+                    bias = np.frombuffer(file2)
+                    bias = np.reshape(bias, eval(shapes[int(2*count+1)]))
 
-                layer.weight = weight
-                layer.bias = bias
+                    layer.weight = weight
+                    layer.bias = bias
+        except:
+            pass
