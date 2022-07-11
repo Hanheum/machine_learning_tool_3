@@ -1,8 +1,9 @@
-import cupy as np
+import numpy as np
 from math import e
-from cupyx.scipy.signal import correlate, convolve
+from scipy.signal import correlate, convolve
 from os import listdir
 from random import choice
+from time import time
 
 def ReLU_deriv(X):
     return X>0
@@ -34,10 +35,8 @@ def MSE(X, Y):
 
 def categorical_crossentropy(Y, Y_pred):
     logged = np.log10(Y_pred)
-    print(Y_pred)
     sumed = Y.dot(logged.T)
     CE = -np.sum(sumed)
-    print(CE)
     return CE
 
 def no_effect(x):
@@ -116,13 +115,17 @@ class dense:
         return dx
 
 class conv2D:
-    def __init__(self, filters, kernel_size, activation, input_shape, learning_rate=0.001):
+    def __init__(self, filters, kernel_size, activation, input_shape=None, learning_rate=0.001):
         self.filters = filters
         self.input_shape = input_shape
         self.learning_rate = learning_rate
-        self.kernel = np.random.randn(self.filters, self.input_shape[0], *kernel_size)
-        self.expected_shape = int(self.input_shape[-1]-kernel_size[0]+1)
-        self.bias = np.random.randn(self.filters, self.expected_shape, self.expected_shape)
+        try:
+            self.kernel = np.random.randn(self.filters, self.input_shape[0], *kernel_size)
+            self.expected_shape = int(self.input_shape[-1]-kernel_size[0]+1)
+            self.bias = np.random.randn(self.filters, self.expected_shape, self.expected_shape)
+            self.output_shape = (filters, self.expected_shape, self.expected_shape)
+        except:
+            pass
         self.kernel_size = kernel_size
         self.Z = 0
         self.A = 0
@@ -137,6 +140,13 @@ class conv2D:
             self.activation_derivative = sigmoid_deriv
         elif activation == 'softmax':
             self.activation = softmax
+
+    def init2(self, input_shape):
+        self.expected_shape = int(input_shape[-1] - self.kernel_size[0] + 1)
+        self.kernel = np.random.randn(self.filters, input_shape[0], *self.kernel_size)
+        self.bias = np.random.randn(self.filters, self.expected_shape, self.expected_shape)
+        self.output_shape = (self.filters, self.expected_shape, self.expected_shape)
+        self.input_shape = input_shape
 
     def forward(self, x):
         self.Z = np.zeros((len(x), self.filters, self.expected_shape, self.expected_shape))
@@ -165,14 +175,23 @@ class conv2D:
         return dx
 
 class avg_pool2D:
-    def __init__(self, size, input_shape):
+    def __init__(self, size, input_shape=None):
         self.size = size
         self.kernel = np.ones(self.size)
-        self.expected_shape = int(input_shape[-1]-self.size[0]+1)
+        try:
+            self.expected_shape = int(input_shape[-1]-self.size[0]+1)
+            self.output_shape = (input_shape[0], self.expected_shape, self.expected_shape)
+        except:
+            pass
         self.Z = 0
         self.input_shape = input_shape
         self.filter_size = self.size[0]*self.size[1]
         self.type = 'avg_pool2D'
+
+    def init2(self, input_shape):
+        self.input_shape = input_shape
+        self.expected_shape = int(input_shape[-1] - self.size[0] + 1)
+        self.output_shape = (input_shape[0], self.expected_shape, self.expected_shape)
 
     def forward(self, x):
         m = len(x)
@@ -192,14 +211,23 @@ class avg_pool2D:
         return dX
 
 class flatten:
-    def __init__(self, input_shape):
+    def __init__(self, input_shape=None):
         self.input_shape = input_shape
-        self.output_shape = int(np.prod(np.asarray(self.input_shape)))
+        try:
+            self.output_shape_1 = int(np.prod(np.asarray(self.input_shape)))
+            self.output_shape = (int(np.prod(np.asarray(self.input_shape))), )
+        except:
+            pass
         self.type = 'flatten'
         self.activation_derivative = no_effect
 
+    def init2(self, input_shape):
+        self.input_shape = input_shape
+        self.output_shape_1 = int(np.prod(np.asarray(input_shape)))
+        self.output_shape = (int(np.prod(np.asarray(input_shape))), )
+
     def forward(self, x):
-        return np.reshape(x, (len(x), self.output_shape))
+        return np.reshape(x, (len(x), self.output_shape_1))
 
     def backward(self, dz):
         return np.reshape(dz, (len(dz), *self.input_shape))
@@ -347,3 +375,17 @@ class model:
                     layer.bias = bias
         except:
             pass
+
+    def train(self, x, y, optimizer, epochs, batch_size=32):
+        if optimizer == 'gd':
+            opt = self.backward_propagation
+            values = (x, y)
+        elif optimizer == 'sgd':
+            opt = self.sgd
+            values = (x, y, batch_size)
+        for epoch in range(epochs):
+            start_time = time()
+            cost_value = opt(*values)
+            end_time = time()
+            duration = end_time-start_time
+            print('epoch: {} | duration: {} seconds | cost: {}'.format(epoch+1, round(duration), cost_value))
