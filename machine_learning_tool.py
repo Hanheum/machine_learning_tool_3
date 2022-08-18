@@ -1,17 +1,17 @@
-import numpy as np
+import cupy as np
 from math import e
-from scipy.signal import correlate, convolve
+from cupyx.scipy.signal import correlate, convolve
 from os import listdir
 from random import choice
 from time import time
 
-def ReLU_deriv(X):
+def ReLU_deriv(X, second_param=0, third_param=0):
     return X>0
 
 def ReLU(X):
-    return np.maximum(X, 0)
+    return np.maximum(X, 0.0001*X)
 
-def sigmoid_deriv(X):
+def sigmoid_deriv(X, second_param, third_param=0):
     a = sigmoid(X)
     da = a*(1-a)
     return da
@@ -22,25 +22,58 @@ def sigmoid(x):
     y = unit_one/(unit_one+unit_e**(-x))
     return y
 
-def softmax(a) :
-    c = np.max(a)
-    exp_a = np.exp(a-c)
-    sum_exp_a = np.sum(exp_a)
-    y = exp_a / sum_exp_a
+def softmax(a):
+    Y = np.zeros_like(a.copy())
+    for i, b in enumerate(a.copy()):
+        min = np.min(b)
+        if min < 0:
+            b -= min * 2
+        total = np.sum(b)
+        y = b/total
+        Y[i] = y
+    return Y
+
+def softmax_single(a):
+    min = np.min(a)
+    if min<0:
+        a -= min*2
+    total = np.sum(a)
+    y = a/total
     return y
+
+def softmax_deriv(f, second_param, third_param):
+    which_one = third_param
+    first = softmax_single(second_param.copy())[which_one]
+    second_thing = second_param.copy()
+    second_thing[which_one] += 0.000000001
+    second = softmax_single(second_thing.copy())[which_one]
+    deriv = (second-first)/0.000000001
+    return deriv
 
 def MSE(X, Y):
     cost = np.sum((Y-X)**2)/(np.prod(np.array(Y.shape)))
     return cost
 
 def categorical_crossentropy(Y, Y_pred):
+    Y = np.reshape(Y, (int(np.prod(np.array(Y.shape))), ))
     logged = np.log10(Y_pred)
-    sumed = Y.dot(logged.T)
-    CE = -np.sum(sumed)
-    return CE
+    logged = np.reshape(logged, (int(np.prod(np.array(logged.shape))), ))
+    cost_value = 0
+    for i, a in enumerate(Y):
+        if a == 0:
+            continue
+        try:
+            int(logged[i])
+            cost_value += a*logged[i]
+        except:
+            continue
+    return -cost_value
 
 def no_effect(x):
     return x
+
+def binary_cross_entropy(y_true, y_pred):
+    return -np.mean(y_true * np.log(y_pred)+(1-y_true)*np.log(1-y_pred))
 
 def random_seed_generator(min2max, size):
     seed = []
@@ -53,18 +86,18 @@ def random_seed_generator(min2max, size):
         seed.append(seed_choice)
     return seed
 
-def cost_deriv(A, Y, function, A_deriv=True):
+def cost_deriv(Z, A, Y, function, A_deriv=True, A_activation_deriv=ReLU_deriv):
     very_small_unit = 0.00000001
-    first_cost = function(A, Y)
+    first_cost = function(Y, A)
     deriv = np.zeros_like(A)
     factor_size = len(deriv[0])
     for a in range(len(A)):
         for b in range(factor_size):
             A[a][b] += very_small_unit
             if A_deriv:
-                deriv[a][b] = ((MSE(A, Y)-first_cost)/very_small_unit)*sigmoid_deriv(A[a][b])
+                deriv[a][b] = ((function(Y, A)-first_cost)/very_small_unit)*A_activation_deriv(A[a][b], second_param=Z[a], third_param=b)
             else:
-                deriv[a][b] = ((MSE(A, Y) - first_cost) / very_small_unit)
+                deriv[a][b] = ((function(Y, A) - first_cost) / very_small_unit)
             A[a][b] -= very_small_unit
     return deriv
 
@@ -77,7 +110,7 @@ class dense:
             self.weight = np.random.randn(input_shape[0], nods)
         except:
             pass
-        self.bias = np.zeros((nods))
+        self.bias = np.random.randn((nods))
         self.learning_rate = learning_rate
         self.Z = 0
         self.A = 0
@@ -94,11 +127,12 @@ class dense:
             self.activation_derivative = sigmoid_deriv
         elif activation == 'softmax':
             self.activation = softmax
+            self.activation_derivative = softmax_deriv
 
     def init2(self, input_shape):
         self.input_shape = input_shape
         self.weight = np.random.randn(input_shape[0], self.nods)
-        self.bias = np.zeros((self.nods))
+        self.bias = np.random.rand((self.nods))
 
     def forward(self, x):
         self.Z = x.dot(self.weight)+self.bias
@@ -122,7 +156,7 @@ class conv2D:
         try:
             self.kernel = np.random.randn(self.filters, self.input_shape[0], *kernel_size)
             self.expected_shape = int(self.input_shape[-1]-kernel_size[0]+1)
-            self.bias = np.random.randn(self.filters, self.expected_shape, self.expected_shape)
+            self.bias = np.zeros((self.filters, self.expected_shape, self.expected_shape))
             self.output_shape = (filters, self.expected_shape, self.expected_shape)
         except:
             pass
@@ -140,21 +174,23 @@ class conv2D:
             self.activation_derivative = sigmoid_deriv
         elif activation == 'softmax':
             self.activation = softmax
+            self.activation_derivative = softmax_deriv
 
     def init2(self, input_shape):
         self.expected_shape = int(input_shape[-1] - self.kernel_size[0] + 1)
         self.kernel = np.random.randn(self.filters, input_shape[0], *self.kernel_size)
-        self.bias = np.random.randn(self.filters, self.expected_shape, self.expected_shape)
+        self.bias = np.zeros((self.filters, self.expected_shape, self.expected_shape))
         self.output_shape = (self.filters, self.expected_shape, self.expected_shape)
         self.input_shape = input_shape
 
     def forward(self, x):
-        self.Z = np.zeros((len(x), self.filters, self.expected_shape, self.expected_shape))
+        self.Z = np.zeros((len(x), *self.bias.shape))
         for a, one_x in enumerate(x):
             for f in range(self.filters):
                 for i in range(self.input_shape[0]):
-                    y = correlate(one_x[i], self.kernel[f][i], mode='valid', method='direct')+self.bias[f]
-                    self.Z[a][f] = y
+                    y = correlate(one_x[i], self.kernel[f][i], mode='valid', method='direct')
+                    self.Z[a][f] += y
+                self.Z[a][f] += self.bias[f]
         self.A = self.activation(self.Z)
         return self.Z, self.A
 
@@ -244,7 +280,7 @@ class model:
         if cost == 'mse':
             self.cost_function = MSE
         elif cost == 'categorical_crossentropy':
-            self.cost_function = categorical_crossentropy
+            self.cost_function = binary_cross_entropy
 
         shapes = []
         for layer in layers:
@@ -272,7 +308,7 @@ class model:
 
     def backward_propagation(self, x, y):
         Zs, As = self.forward_propagation(x)
-        target_dZ = cost_deriv(As[-1], y, self.cost_function)
+        target_dZ = cost_deriv(Z=Zs[-1], A=As[-1], Y=y, function=self.cost_function, A_activation_deriv=self.layers[-1].activation_derivative, A_deriv=True)
         for count in range(len(self.layers)):
             layer_index = int(len(self.layers)-count-1)
             if self.types[layer_index] == 'dense':
@@ -293,7 +329,7 @@ class model:
             elif self.types[layer_index] == 'avg_pool2D' or self.types[layer_index] == 'flatten':
                 target_dZ = self.layers[layer_index].backward(target_dZ)
 
-        cost = self.cost_function(As[-1], y)
+        cost = self.cost_function(y, As[-1])
         return cost
 
     def sgd(self, x, y, batch_size=32):
